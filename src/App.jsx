@@ -57,6 +57,7 @@ import {
 } from "./geometry.js";
 
 const STORAGE_KEY = "house-1113-cad-state-v8";
+const VERSION_STORAGE_KEY = "house-1113-cad-versions-v1";
 const AUTH_KEY = "house-1113-cad-auth-v1";
 const PASSCODE_HASH = "a020f494725f155483b7f74deab8543a22df5fad74d508ecfd9f5c1bb0f79b92";
 const SNAP_GRID = 0.5;
@@ -77,17 +78,79 @@ function cloneInitialState() {
   };
 }
 
+function cloneProject(project) {
+  return {
+    walls: project.walls.map((wall) => ({ ...wall })),
+    labels: project.labels.map((label) => ({ ...label })),
+    updatedAt: project.updatedAt || new Date().toISOString()
+  };
+}
+
+function normalizeProject(value) {
+  if (!value || !Array.isArray(value.walls) || !Array.isArray(value.labels)) return null;
+  return {
+    walls: value.walls.map((wall) => ({ ...wall })),
+    labels: value.labels.map((label) => ({ ...label })),
+    updatedAt: value.updatedAt || new Date().toISOString()
+  };
+}
+
+function encodeProject(project) {
+  const bytes = new TextEncoder().encode(JSON.stringify(cloneProject(project)));
+  let binary = "";
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+}
+
+function decodeProject(encoded) {
+  const padded = `${encoded.replaceAll("-", "+").replaceAll("_", "/")}${"=".repeat((4 - (encoded.length % 4)) % 4)}`;
+  const binary = atob(padded);
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  return normalizeProject(JSON.parse(new TextDecoder().decode(bytes)));
+}
+
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const field = document.createElement("textarea");
+    field.value = text;
+    field.setAttribute("readonly", "");
+    field.style.position = "fixed";
+    field.style.left = "-9999px";
+    document.body.append(field);
+    field.select();
+    document.execCommand("copy");
+    field.remove();
+  }
+}
+
 function loadInitialState() {
   try {
+    const sharedProject = new URLSearchParams(window.location.hash.slice(1)).get("plan");
+    if (sharedProject) {
+      const decoded = decodeProject(sharedProject);
+      if (decoded) return decoded;
+    }
     const saved = localStorage.getItem(STORAGE_KEY);
     if (!saved) return cloneInitialState();
-    const parsed = JSON.parse(saved);
-    if (!Array.isArray(parsed.walls) || !Array.isArray(parsed.labels)) {
-      return cloneInitialState();
-    }
-    return parsed;
+    return normalizeProject(JSON.parse(saved)) || cloneInitialState();
   } catch {
     return cloneInitialState();
+  }
+}
+
+function loadVersions() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(VERSION_STORAGE_KEY) || "[]");
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((version) => ({ ...version, project: normalizeProject(version.project) }))
+      .filter((version) => version.id && version.name && version.project);
+  } catch {
+    return [];
   }
 }
 
@@ -96,6 +159,8 @@ function App() {
   const svgRef = useRef(null);
   const importRef = useRef(null);
   const [project, setProject] = useState(loadInitialState);
+  const [versions, setVersions] = useState(loadVersions);
+  const [versionName, setVersionName] = useState("");
   const [selected, setSelected] = useState({ type: "wall", id: "i-family-living-partial" });
   const [tool, setTool] = useState("select");
   const [zoom, setZoom] = useState(1);
@@ -154,6 +219,10 @@ function App() {
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(project));
   }, [project]);
+
+  useEffect(() => {
+    localStorage.setItem(VERSION_STORAGE_KEY, JSON.stringify(versions));
+  }, [versions]);
 
   const canvasPoint = useCallback(
     (event, forceSnap = false) => {
@@ -217,14 +286,11 @@ function App() {
   const alignedDraftEnd = useCallback(
     (point) => {
       if (!draftWall) return point;
-      const snapped = snapToWallAnchor(point);
-      const dx = Math.abs(snapped.x - draftWall.x);
-      const dy = Math.abs(snapped.y - draftWall.y);
-      return dx > dy ? { x: snapped.x, y: draftWall.y } : { x: draftWall.x, y: snapped.y };
+      return snapToWallAnchor(point);
     },
     [draftWall, snapToWallAnchor]
   );
-  const draftEnd = draftWall && hoverPoint ? alignedDraftEnd(hoverPoint) : draftWall ? { x: draftWall.x + 7, y: draftWall.y } : null;
+  const draftEnd = draftWall && hoverPoint ? alignedDraftEnd(hoverPoint) : draftWall ? { x: draftWall.x + 7, y: draftWall.y + 4 } : null;
 
   const placeWallPoint = useCallback(
     (rawPoint) => {
@@ -364,12 +430,11 @@ function App() {
     }
     if (dragState.mode === "endpoint") {
       const original = dragState.original;
-      const orientation = wallOrientation(original);
       const patch = {};
       const keyX = dragState.endpoint === "start" ? "x1" : "x2";
       const keyY = dragState.endpoint === "start" ? "y1" : "y2";
-      patch[keyX] = cleanNumber(orientation === "vertical" ? original[keyX] : original[keyX] + dx);
-      patch[keyY] = cleanNumber(orientation === "horizontal" ? original[keyY] : original[keyY] + dy);
+      patch[keyX] = cleanNumber(original[keyX] + dx);
+      patch[keyY] = cleanNumber(original[keyY] + dy);
       updateWall(dragState.id, patch);
     }
   };
@@ -502,12 +567,65 @@ function App() {
     event.target.value = "";
   };
 
+  const saveVersion = () => {
+    const name = versionName.trim() || `Version ${versions.length + 1}`;
+    const now = new Date().toISOString();
+    const existing = versions.find((version) => version.name.toLowerCase() === name.toLowerCase());
+    const nextVersion = {
+      id: existing?.id || `version-${Date.now()}`,
+      name,
+      createdAt: existing?.createdAt || now,
+      updatedAt: now,
+      project: { ...cloneProject(project), updatedAt: now }
+    };
+    setVersions((items) => [nextVersion, ...items.filter((item) => item.id !== nextVersion.id)]);
+    setVersionName(name);
+    setStatus(`Saved version: ${name}`);
+  };
+
+  const loadVersion = (id) => {
+    const version = versions.find((item) => item.id === id);
+    if (!version) return;
+    commitProject(cloneProject(version.project), `Loaded version: ${version.name}`);
+    setVersionName(version.name);
+    setSelected({ type: null, id: null });
+    window.history.replaceState(null, "", window.location.pathname + window.location.search);
+  };
+
+  const copyVersionLink = async () => {
+    const encoded = encodeProject(project);
+    const link = `${window.location.origin}${window.location.pathname}${window.location.search}#plan=${encoded}`;
+    await copyText(link);
+    setStatus("Version link copied");
+  };
+
+  const quickEditLabel = (label) => {
+    const name = window.prompt("Room or section label", label.name);
+    if (name === null) return;
+    const dimensions = window.prompt("Dimensions", label.dimensions);
+    if (dimensions === null) return;
+    const note = window.prompt("Wish list / contractor note", label.note || "");
+    if (note === null) return;
+    commitProject(
+      (current) => ({
+        ...current,
+        labels: current.labels.map((item) => (
+          item.id === label.id
+            ? { ...item, name: name.trim() || item.name, dimensions: dimensions.trim(), note: note.trim() }
+            : item
+        ))
+      }),
+      "Label updated"
+    );
+    setSelected({ type: "label", id: label.id });
+  };
+
   const shareSummary = async () => {
     const summary = `${PLAN_META.title}\nInterior walls: ${project.walls.filter((wall) => wall.kind === "interior").length}\nLabels: ${project.labels.length}\nExport SVG/PNG/JSON from the app for contractors.`;
     if (navigator.share) {
       await navigator.share({ title: PLAN_META.title, text: summary });
     } else {
-      await navigator.clipboard.writeText(summary);
+      await copyText(summary);
       setStatus("Share summary copied");
     }
   };
@@ -543,6 +661,12 @@ function App() {
         onRedo={redo}
         canUndo={history.length > 0}
         canRedo={future.length > 0}
+        versionName={versionName}
+        setVersionName={setVersionName}
+        versions={versions}
+        onSaveVersion={saveVersion}
+        onLoadVersion={loadVersion}
+        onCopyVersionLink={copyVersionLink}
       />
       <aside className="left-rail" aria-label="Drawing tools">
         <div className="rail-brand" title="Home">
@@ -687,6 +811,7 @@ function App() {
                   metric={areaMetrics[label.id]}
                   selected={selected.type === "label" && selected.id === label.id}
                   onPointerDown={handleLabelPointerDown}
+                  onDoubleClick={quickEditLabel}
                 />
               ))}
             </g>
@@ -756,7 +881,13 @@ function TopBar({
   onUndo,
   onRedo,
   canUndo,
-  canRedo
+  canRedo,
+  versionName,
+  setVersionName,
+  versions,
+  onSaveVersion,
+  onLoadVersion,
+  onCopyVersionLink
 }) {
   return (
     <header className="topbar">
@@ -774,6 +905,31 @@ function TopBar({
         <div className="save-state">
           <CheckCircle2 size={16} />
           <span>{status}</span>
+        </div>
+        <div className="version-tools">
+          <input
+            aria-label="Version name"
+            value={versionName}
+            onChange={(event) => setVersionName(event.target.value)}
+            placeholder="Version name"
+          />
+          <button onClick={onSaveVersion} title="Save named version">
+            <Save size={16} />
+            <span>Save</span>
+          </button>
+          <select aria-label="Load saved version" value="" onChange={(event) => onLoadVersion(event.target.value)}>
+            <option value="" disabled>
+              Load
+            </option>
+            {versions.map((version) => (
+              <option key={version.id} value={version.id}>
+                {version.name}
+              </option>
+            ))}
+          </select>
+          <button onClick={onCopyVersionLink} title="Copy shareable version link">
+            <Copy size={16} />
+          </button>
         </div>
         <button className="action-button" onClick={onShare}>
           <Share2 size={17} />
@@ -914,7 +1070,7 @@ function WallSegment({ wall, selected, onPointerDown, onEndpointDown }) {
   );
 }
 
-function RoomLabel({ label, metric, selected, onPointerDown }) {
+function RoomLabel({ label, metric, selected, onPointerDown, onDoubleClick }) {
   const areaText = selected && metric?.detectedArea
     ? formatArea(metric.detectedArea)
     : selected && metric?.printedArea
@@ -930,13 +1086,25 @@ function RoomLabel({ label, metric, selected, onPointerDown }) {
     : areaText
       ? 7.2 + dimensionLineHeight
       : 5.6 + dimensionLineHeight;
+  const textWidth = Math.max(
+    label.name.length * (compactDims ? 0.54 : 0.72),
+    ...dimensionLines.map((line) => line.length * (compactDims ? 0.36 : 0.48)),
+    label.note ? Math.min(label.note.length * 0.22, compactDims ? 5.8 : 10.8) : 0,
+    areaText ? areaText.length * 0.38 : 0
+  );
+  const labelWidth = clamp(textWidth + 1.4, compactDims ? 4.6 : 6.4, compactDims ? 7.2 : 13.8);
+  const labelX = -labelWidth / 2;
   return (
     <g
       className={`room-label ${compactDims ? "compact" : ""} ${selected ? "selected" : ""}`}
       transform={`translate(${label.x} ${label.y})`}
       onPointerDown={(event) => onPointerDown(event, label)}
+      onDoubleClick={(event) => {
+        event.stopPropagation();
+        onDoubleClick(label);
+      }}
     >
-      <rect className="label-hit" x="-8.5" y="-3.4" width="17" height={labelHeight} rx="0.6" />
+      <rect className="label-hit" x={labelX} y="-2.35" width={labelWidth} height={labelHeight - 1.25} rx="0.35" />
       <text className="label-name" y="-0.75" textAnchor="middle">
         {label.name}
       </text>
@@ -957,7 +1125,7 @@ function RoomLabel({ label, metric, selected, onPointerDown }) {
           {label.note.length > 30 ? `${label.note.slice(0, 30)}...` : label.note}
         </text>
       )}
-      {selected && <rect className="label-selected-box" x="-8.5" y="-3.4" width="17" height={labelHeight} rx="0.6" />}
+      {selected && <rect className="label-selected-box" x={labelX} y="-2.35" width={labelWidth} height={labelHeight - 1.25} rx="0.35" />}
     </g>
   );
 }

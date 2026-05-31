@@ -228,6 +228,7 @@ button:disabled {
 
 .export-group,
 .zoom-control,
+.version-tools,
 .segmented {
   display: inline-flex;
   overflow: hidden;
@@ -238,18 +239,53 @@ button:disabled {
 
 .export-group button,
 .zoom-control button,
+.version-tools button,
 .segmented button {
   min-height: 36px;
   border: 0;
   border-right: 1px solid var(--line);
   border-radius: 0;
   padding: 0 11px;
+  white-space: nowrap;
 }
 
 .export-group button:last-child,
 .zoom-control button:last-child,
+.version-tools button:last-child,
 .segmented button:last-child {
   border-right: 0;
+}
+
+.version-tools {
+  min-width: 0;
+}
+
+.version-tools input,
+.version-tools select {
+  min-width: 0;
+  height: 36px;
+  border: 0;
+  border-right: 1px solid var(--line);
+  background: #ffffff;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 620;
+  outline: 0;
+}
+
+.version-tools input {
+  width: 132px;
+  padding: 0 10px;
+}
+
+.version-tools select {
+  width: 104px;
+  padding: 0 8px;
+}
+
+.version-tools input:focus,
+.version-tools select:focus {
+  box-shadow: inset 0 0 0 2px rgba(15, 118, 110, 0.22);
 }
 
 .zoom-control span {
@@ -862,6 +898,7 @@ button:disabled {
   }
 
   .topbar-actions .export-group span,
+  .version-tools button span,
   .action-button span {
     display: none;
   }
@@ -885,6 +922,8 @@ button:disabled {
 
   .title-block span,
   .save-state,
+  .version-tools input,
+  .version-tools select,
   .zoom-control,
   .canvas-chips .chip span {
     display: none;
