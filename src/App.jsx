@@ -61,6 +61,7 @@ const VERSION_STORAGE_KEY = "house-1113-cad-versions-v1";
 const AUTH_KEY = "house-1113-cad-auth-v1";
 const PASSCODE_HASH = "a020f494725f155483b7f74deab8543a22df5fad74d508ecfd9f5c1bb0f79b92";
 const SNAP_GRID = 0.5;
+const DEFAULT_ZOOM = 0.78;
 
 const toolItems = [
   { id: "select", label: "Select", icon: MousePointer2 },
@@ -163,7 +164,7 @@ function App() {
   const [versionName, setVersionName] = useState("");
   const [selected, setSelected] = useState({ type: "wall", id: "i-family-living-partial" });
   const [tool, setTool] = useState("select");
-  const [zoom, setZoom] = useState(1);
+  const [zoom, setZoom] = useState(DEFAULT_ZOOM);
   const [showUnderlay, setShowUnderlay] = useState(false);
   const [showInspector, setShowInspector] = useState(true);
   const [snapEnabled, setSnapEnabled] = useState(true);
@@ -707,10 +708,13 @@ function App() {
             <button className={tool === "select" ? "selected" : ""} onClick={() => setTool("select")} title="Select">
               <MousePointer2 size={18} />
             </button>
+            <button onClick={() => setZoom((value) => clamp(value - 0.15, 0.55, 2.4))} title="Zoom out">
+              <ZoomOut size={18} />
+            </button>
             <button onClick={() => setZoom((value) => clamp(value + 0.15, 0.65, 2.4))} title="Zoom in">
               <ZoomIn size={18} />
             </button>
-            <button onClick={() => setZoom(1)} title="Fit">
+            <button onClick={() => setZoom(DEFAULT_ZOOM)} title="Fit">
               <Focus size={18} />
               <span>Fit</span>
             </button>
@@ -777,9 +781,6 @@ function App() {
               opacity={showUnderlay ? 0.2 : 0}
               pointerEvents="none"
             />
-            <g className="openings" pointerEvents="none">
-              {openings.map((opening) => <Opening key={opening.id} opening={opening} />)}
-            </g>
             <g className="fixed-details" pointerEvents="none">
               {fixedDetails.map((detail) => <FixedDetail key={detail.id} detail={detail} />)}
             </g>
@@ -802,6 +803,9 @@ function App() {
                   </text>
                 </g>
               )}
+            </g>
+            <g className="openings" pointerEvents="none">
+              {openings.map((opening) => <Opening key={opening.id} opening={opening} />)}
             </g>
             <g className="labels">
               {project.labels.map((label) => (
@@ -1131,9 +1135,13 @@ function RoomLabel({ label, metric, selected, onPointerDown, onDoubleClick }) {
 }
 
 function Opening({ opening }) {
+  if (opening.kind === "opening") {
+    return <line className="wall-opening-cut" x1={opening.x1} y1={opening.y1} x2={opening.x2} y2={opening.y2} />;
+  }
   if (opening.kind === "window") {
     return (
       <g className="window-opening">
+        <line className="window-cut" x1={opening.x1} y1={opening.y1} x2={opening.x2} y2={opening.y2} />
         <line x1={opening.x1} y1={opening.y1} x2={opening.x2} y2={opening.y2} />
         <line x1={opening.x1} y1={opening.y1 + 0.36} x2={opening.x2} y2={opening.y2 + 0.36} />
       </g>
@@ -1363,8 +1371,11 @@ function ScaleBar() {
 }
 
 function renderOpeningMarkup(opening) {
+  if (opening.kind === "opening") {
+    return `<line x1="${opening.x1}" y1="${opening.y1}" x2="${opening.x2}" y2="${opening.y2}" stroke="#ffffff" stroke-width="0.82" stroke-linecap="square"/>`;
+  }
   if (opening.kind === "window") {
-    return `<g stroke="#9aa7ad" stroke-width="0.16"><line x1="${opening.x1}" y1="${opening.y1}" x2="${opening.x2}" y2="${opening.y2}"/><line x1="${opening.x1}" y1="${opening.y1 + 0.36}" x2="${opening.x2}" y2="${opening.y2 + 0.36}"/></g>`;
+    return `<g><line x1="${opening.x1}" y1="${opening.y1}" x2="${opening.x2}" y2="${opening.y2}" stroke="#ffffff" stroke-width="0.8" stroke-linecap="square"/><g stroke="#9aa7ad" stroke-width="0.16"><line x1="${opening.x1}" y1="${opening.y1}" x2="${opening.x2}" y2="${opening.y2}"/><line x1="${opening.x1}" y1="${opening.y1 + 0.36}" x2="${opening.x2}" y2="${opening.y2 + 0.36}"/></g></g>`;
   }
   return `<path d="${doorArcPath(opening)}" fill="none" stroke="#707d83" stroke-width="0.14"/>`;
 }

@@ -512,7 +512,14 @@ button:disabled {
   vector-effect: non-scaling-stroke;
 }
 
-.window-opening line {
+.window-opening .window-cut,
+.wall-opening-cut {
+  stroke: #ffffff;
+  stroke-width: 0.8;
+  stroke-linecap: square;
+}
+
+.window-opening line:not(.window-cut) {
   stroke: #9aa7ad;
   stroke-width: 0.13;
   vector-effect: non-scaling-stroke;
